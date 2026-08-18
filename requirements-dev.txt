@@ -1,0 +1,6 @@
+-r requirements.txt
+jupyter==1.0.0
+ipykernel==6.29.5
+matplotlib==3.9.1
+seaborn==0.13.2
+shap==0.45.1
