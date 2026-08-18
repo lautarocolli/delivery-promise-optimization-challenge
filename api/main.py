@@ -42,6 +42,7 @@ class DeliveryPromise(BaseModel):
     promise_end:            datetime
     estimated_minutes_low:  float
     estimated_minutes_high: float
+    notify_merchant_at:     datetime
 
 def build_feature_vector(order: OrderFeatures) -> pd.DataFrame:
     """Construye el vector de features replicando el preprocesamiento de feature_engineering.ipynb."""
@@ -83,11 +84,20 @@ def delivery_promise(order: OrderFeatures) -> DeliveryPromise:
     if pred_high - pred_low < 5:
         pred_low = pred_high - 5
 
+    # Notificar al merchant cuando el rider esté a merchant_avg_prep_min de llegar.
+    # Si el prep time supera el dispatch time, notificar de inmediato.
+    notify_delay_min = max(
+        0.0,
+        order.zone_avg_rider_dispatch_min - order.merchant_avg_prep_min
+    )
+    notify_merchant_at = order.checkout_timestamp + timedelta(minutes=notify_delay_min)
+
     return DeliveryPromise(
         promise_start          = order.checkout_timestamp + timedelta(minutes=pred_low),
         promise_end            = order.checkout_timestamp + timedelta(minutes=pred_high),
         estimated_minutes_low  = round(pred_low, 1),
         estimated_minutes_high = round(pred_high, 1),
+        notify_merchant_at     = notify_merchant_at
     )
 
 
