@@ -24,7 +24,10 @@ Dos modelos independientes de regresión cuantílica con XGBoost:
 La variable target es `total_delivery_min`: minutos transcurridos desde el checkout
 hasta que el pedido llega al cliente.
 
-El endpoint también calcula notify_merchant_at: el momento para notificar al merchant de forma que el pedido esté listo al llegar el rider, y no antes. La lógica es checkout + max(0, zone_avg_rider_dispatch_min - merchant_avg_prep_min). Si el prep time supera el dispatch time, se notifica de inmediato.
+El endpoint también calcula `notify_merchant_at`: el momento para notificar al merchant
+de forma que el pedido esté listo al llegar el rider, y no antes. La lógica es
+`checkout + max(0, zone_avg_rider_dispatch_min - merchant_avg_prep_min)`.
+Si el prep time supera el dispatch time, se notifica de inmediato.
 
 ---
 
@@ -45,7 +48,7 @@ usan el promedio de su categoría como fallback.
 ### 2. TAU_HIGH = 0.975, no 0.97
 
 Todos los modelos entrenados en TAU = 0.97 produjeron ~3.5-3.7% de late rate en
-validación independientemente del learning rate o la profundidad - un gap de
+validación independientemente del learning rate o la profundidad — un gap de
 calibración consistente de ~0.6 puntos percentilares. Entrenar en TAU = 0.975
 compensa este gap y alcanza 3.0% en validación y 2.7% en el test set.
 
@@ -81,23 +84,26 @@ de cada orden se computan solo con órdenes anteriores a ella.
 ---
 
 ## Estructura del proyecto
+
+```
 ├── sql/
-│ └── build_dataset.sql # Query de extracción de features (ventana 30 días)
+│   └── build_dataset.sql          # Query de extracción de features (ventana 30 días)
 ├── data/
-│ └── generate_synthetic_data.py
+│   └── generate_synthetic_data.py
 ├── notebooks/
-│ ├── 01_eda.ipynb
-│ ├── 02_feature_engineering.ipynb
-│ └── 03_modeling.ipynb # Hyperparameter tuning, SHAP, evaluación en test
+│   ├── 01_eda.ipynb
+│   ├── 02_feature_engineering.ipynb
+│   └── 03_modeling.ipynb          # Hyperparameter tuning, SHAP, evaluación en test
 ├── model/
-│ ├── xgb_high.pkl
-│ ├── xgb_low.pkl
-│ └── feature_cols.pkl
+│   ├── xgb_high.pkl
+│   ├── xgb_low.pkl
+│   └── feature_cols.pkl
 ├── api/
-│ └── main.py # FastAPI - POST /delivery-promise
+│   └── main.py                    # FastAPI - POST /delivery-promise
 ├── Dockerfile
-├── requirements.txt # Dependencias de runtime de la API
-└── requirements-dev.txt # + notebooks, SHAP, visualización
+├── requirements.txt               # Dependencias de runtime de la API
+└── requirements-dev.txt           # + notebooks, SHAP, visualización
+```
 
 ---
 
@@ -108,33 +114,41 @@ docker build -t delivery-promise .
 docker run -p 8000:8000 delivery-promise
 ```
 
+### Diseño del endpoint
+
+El cliente envía únicamente los datos disponibles en el momento del checkout.
+Los agregados históricos (`merchant_avg_prep_min`, `zone_avg_delivery_min`, etc.)
+son calculados internamente por la API mediante una query al historial de órdenes,
+replicando la misma lógica del SQL de feature engineering.
+
+En producción esta query apuntaría a BigQuery o a un feature store actualizado
+diariamente; en la implementación actual se reemplaza por un placeholder con
+valores dummy para permitir el testing sin base de datos.
+
 **POST** `/delivery-promise`
 
 ```json
 {
+    "order_id":           "ORD-001",
+    "merchant_id":        "M-42",
+    "zone_id":            "Z-3",
     "checkout_timestamp": "2026-03-20T20:00:00",
-    "distance_km": 3.5,
-    "merchant_avg_prep_min": 25.0,
-    "merchant_std_prep_min": 5.0,
-    "zone_avg_delivery_min": 45.0,
-    "zone_avg_rider_dispatch_min": 12.0,
-    "merchant_orders_ongoing": 2,
-    "order_category": "food",
-    "day_of_week": 2
+    "order_category":     "food",
+    "distance_km":        3.5
 }
 ```
 
 ```json
 {
-    "promise_start": "2026-03-20T20:33:44.737473",
-    "promise_end": "2026-03-20T21:11:05.871277",
-    "estimated_minutes_low": 33.7,
-    "estimated_minutes_high": 71.1,
-    "notify_merchant_at": "2026-03-20T20:00:00"
+    "promise_start":          "2026-03-20T20:31:53.920097",
+    "promise_end":            "2026-03-20T21:00:57.166443",
+    "estimated_minutes_low":  31.9,
+    "estimated_minutes_high": 61.0,
+    "notify_merchant_at":     "2026-03-20T20:00:00"
 }
 ```
 
-**GET** `/health` - devuelve estado del modelo y cantidad de features.
+**GET** `/health` — devuelve estado del modelo y cantidad de features.
 
 Documentación interactiva: `http://localhost:8000/docs`
 
@@ -142,16 +156,26 @@ Documentación interactiva: `http://localhost:8000/docs`
 
 ## Limitaciones conocidas y trabajo futuro
 
-- **Cap de ventana máxima**: si negocio define un ancho máximo de intervalo (ej. 30 min), aplicar `promise_start = promise_end - MAX_WINDOW`. Con el modelo actual, el 2% de las órdenes supera los 60 min.
-- **Cold-start de merchants**: usan el promedio de categoría como fallback para `merchant_avg_prep_min` y `merchant_std_prep_min`.
+- **Feature store**: en producción, los agregados históricos deben precomputarse en
+  un feature store actualizado diariamente. La recomputación en tiempo real por orden
+  no es viable a escala.
+- **Cap de ventana máxima**: si negocio define un ancho máximo de intervalo (ej. 30 min),
+  aplicar `promise_start = promise_end - MAX_WINDOW`. Con el modelo actual, el 2% de
+  las órdenes supera los 60 min.
+- **Cold-start de merchants**: usan el promedio de categoría como fallback para
+  `merchant_avg_prep_min` y `merchant_std_prep_min`.
+- **Cold-start de zonas**: sin historial de zona, se usa el promedio global. Requeriría
+  imputación por zona vecina en producción.
 
 ---
 
 ## Asistencia de IA
 
 Esta solución fue desarrollada con el apoyo de **Claude**, utilizado como
-colaborador técnico a lo largo del proyecto. Claude contribuyó en el diseño del SQL, las decisiones de feature engineering, la generación de los datos sintéticos y la sintaxis de la implementación.
+colaborador técnico a lo largo del proyecto. Claude contribuyó en el diseño del SQL,
+las decisiones de feature engineering, la generación de los datos sintéticos y la
+sintaxis de la implementación.
 
-Todas las decisiones en las que fueron validadas empíricamente, adaptadas y comprendidas antes
+Todas las decisiones fueron validadas empíricamente, adaptadas y comprendidas antes
 de ser adoptadas. El autor del challenge conserva pleno entendimiento y responsabilidad
 sobre cada decisión de diseño documentada.
